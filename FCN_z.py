@@ -15,7 +15,7 @@ tf.flags.DEFINE_string("data_dir", "Data_zoo/MIT_SceneParsing/", "path to datase
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
 tf.flags.DEFINE_string("model_dir", "Model_zoo/", "Path to vgg model mat")
 tf.flags.DEFINE_bool('debug', "False", "Debug mode: True/ False")
-tf.flags.DEFINE_string('mode', "visualize", "Mode train/ test/ visualize")
+tf.flags.DEFINE_string('mode', "train", "Mode train/ test/ visualize")
 
 MODEL_URL = 'http://www.vlfeat.org/matconvnet/models/beta16/imagenet-vgg-verydeep-19.mat'
 
@@ -78,8 +78,13 @@ def decoder(image):
         pool5 = utils.max_pool_2x2(conv_final_layer)
         
     return pool5
+
+
 '''
-def inference(image, keep_prob):
+    
+
+
+def inference(image, keep_prob,z):
     """
     Semantic segmentation network definition
     :param image: input image. Should have values in range 0-255
@@ -120,12 +125,16 @@ def inference(image, keep_prob):
 
         W8 = utils.weight_variable([1, 1, 4096, NUM_OF_CLASSESS], name="W8")
         b8 = utils.bias_variable([NUM_OF_CLASSESS], name="b8")
-        conv8 = utils.conv2d_basic(relu_dropout7, W8, b8)
-        # annotation_pred1 = tf.argmax(conv8, dimension=3, name="prediction1")
+	
+       # W_h = utils.weight_variable([1, 7, 7, 4], name="Wh")
 
+        conv8 = tf.concat([utils.conv2d_basic(relu_dropout7, W8, b8), tf.clip_by_value(tf.nn.dropout(z,keep_prob=0.8),-1.0,1.0)],axis = 3)
+        # annotation_pred1 = tf.argmax(conv8, dimension=3, name="prediction1")
+        print("###########################################################")
+        print(conv8)
         # now to upscale to actual image size
         deconv_shape1 = image_net["pool4"].get_shape()
-        W_t1 = utils.weight_variable([4, 4, deconv_shape1[3].value, NUM_OF_CLASSESS], name="W_t1")
+        W_t1 = utils.weight_variable([4, 4, deconv_shape1[3].value, 4], name="W_t1")
         b_t1 = utils.bias_variable([deconv_shape1[3].value], name="b_t1")
         conv_t1 = utils.conv2d_transpose_strided(conv8, W_t1, b_t1, output_shape=tf.shape(image_net["pool4"]))
         fuse_1 = tf.add(conv_t1, image_net["pool4"], name="fuse_1")
@@ -156,13 +165,17 @@ def train(loss_val, var_list):
             utils.add_gradient_summary(grad, var)
     return optimizer.apply_gradients(grads)
 
+def train_z(loss,Z):
+    return tf.gradients(ys = loss, xs = Z)
+
 
 def main(argv=None):
     keep_probability = tf.placeholder(tf.float32, name="keep_probabilty")
     image = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 3], name="input_image")
     annotation = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 3], name="annotation")
+    z = tf.placeholder(tf.float32, shape=[None, 7, 7, 1], name="z")
 
-    pred_annotation, logits = inference(image, keep_probability)
+    pred_annotation, logits = inference(image, keep_probability,z)
     tf.summary.image("input_image", image, max_outputs=2)
     tf.summary.image("ground_truth", tf.cast(annotation, tf.uint8), max_outputs=2)
     tf.summary.image("pred_annotation", tf.cast(pred_annotation, tf.uint8), max_outputs=2)
@@ -172,6 +185,8 @@ def main(argv=None):
     
     loss = tf.reduce_mean(tf.squared_difference(logits ,annotation ))
     loss_summary = tf.summary.scalar("entropy", loss)
+    
+    grads = train_z(loss,z)    
 
     trainable_var = tf.trainable_variables()
     if FLAGS.debug:
@@ -211,51 +226,86 @@ def main(argv=None):
 
     if FLAGS.mode == "train":
         for itr in xrange(MAX_ITERATION):
+            
             train_images, train_annotations = train_dataset_reader.next_batch(FLAGS.batch_size)
-            feed_dict = {image: train_images, annotation: train_annotations, keep_probability: 0.85}
             xx = random.randint(0,100)
             xy =  random.randint(0,100)
             h = random.randint(50,100)
             w = random.randint(50,100)
             train_images[:,xx:xx+h,xy:xy+w,:] =0
+
+            z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,1))
+            
+            feed_dict = {image: train_images, annotation: train_annotations, keep_probability: 0.85, z: z_}
+           #train_images[:,50:100,50:100,:] =0
+            v = 0
+            
+            for p in range(3):
+                z_ol = np.copy(z_)
+               # print("666666666666666666666666666666666666666")
+                z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
+                print("Step: %d, z_step: %d, Train_loss:%g" % (itr,p,z_loss))
+#                print(z_) 
+                g = sess.run([grads],feed_dict=feed_dict)
+                v_prev = np.copy(v)
+               # print(g[0][0].shape)
+                v = 0.001*v - 0.1*g[0][0]
+                z_ += 0.001 * v_prev + (1+0.001)*v
+                z_ = np.clip(z_, -1.0, 1.0)
+               # print(v.shape)
+               # print(z_.shape)
             sess.run(train_op, feed_dict=feed_dict)
 
             if itr % 10 == 0:
                 train_loss, summary_str = sess.run([loss, loss_summary], feed_dict=feed_dict)
                 print("Step: %d, Train_loss:%g" % (itr, train_loss))
+                
                 train_writer.add_summary(summary_str, itr)
+              
 
             if itr % 500 == 0:
                 valid_images, valid_annotations = validation_dataset_reader.next_batch(FLAGS.batch_size)
-                xx = random.randint(0,100)
-                xy =  random.randint(0,100)
+                xx = random.randint(50,100)
+                xy = random.randint(50,100)
                 h = random.randint(50,100)
                 w = random.randint(50,100)
                 valid_images[:,xx:xx+h,xy:xy+w,:] =0
-
-               # valid_images[:,50:100,50:100,:] =0
                 valid_loss, summary_sva = sess.run([loss, loss_summary], feed_dict={image: valid_images, annotation: valid_annotations,
-                                                       keep_probability: 1.0})
+                                                       keep_probability: 1.0, z: z_})
                 print("%s ---> Validation_loss: %g" % (datetime.datetime.now(), valid_loss))
 
                 # add validation loss to TensorBoard
                 validation_writer.add_summary(summary_sva, itr)
-                saver.save(sess, FLAGS.logs_dir + "model__.ckpt", 500)
+                saver.save(sess, FLAGS.logs_dir + "model_z.ckpt", 500)
 
     elif FLAGS.mode == "visualize":
-        valid_images, valid_annotations = validation_dataset_reader.get_random_batch(FLAGS.batch_size)
-        xx = random.randint(0,100)
-        xy =  random.randint(0,100)
+        valid_images, valid_annotations = validation_dataset_reader.get_random_batch(2)
+        xx = random.randint(50,100)
+        xy = random.randint(50,100)
         h = random.randint(50,100)
         w = random.randint(50,100)
         valid_images[:,xx:xx+h,xy:xy+w,:] =0
-
-       # valid_images[:,50:100,50:100,:] =0
-        pred = sess.run(logits, feed_dict={image: valid_images, annotation: valid_annotations,
+        z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,1))
+        feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_}
+        v= 0
+        for p in range(3):
+                z_ol = np.copy(z_)
+               # print("666666666666666666666666666666666666666")
+                z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
+                print("z_step: %d, Train_loss:%g" % (p,z_loss))
+#                print(z_)
+                g = sess.run([grads],feed_dict=feed_dict)
+                v_prev = np.copy(v)
+               # print(g[0][0].shape)
+                v = 0.001*v - 0.1*g[0][0]
+                z_ += 0.001 * v_prev + (1+0.001)*v
+                z_ = np.clip(z_, -1.0, 1.0)
+        
+        pred = sess.run(logits, feed_dict={image: valid_images, annotation: valid_annotations,z:z_,
                                                     keep_probability: 1.0})
+        
        # valid_annotations = np.squeeze(valid_annotations, axis=3)
        # pred = np.squeeze(pred, axis=3)
-        
         print(valid_images.shape)
         print(valid_annotations.shape)
         print(pred.shape)
