@@ -10,7 +10,7 @@ from six.moves import xrange
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("batch_size", "2", "batch size for training")
-tf.flags.DEFINE_string("logs_dir", "logs/", "path to logs directory")
+tf.flags.DEFINE_string("logs_dir", "/scratch1/ram095/nips20/logs", "path to logs directory")
 tf.flags.DEFINE_string("data_dir", "Data_zoo/MIT_SceneParsing/", "path to dataset")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
 tf.flags.DEFINE_string("model_dir", "Model_zoo/", "Path to vgg model mat")
@@ -219,7 +219,7 @@ def main(argv=None):
     validation_writer = tf.summary.FileWriter(FLAGS.logs_dir + '/validation')
 
     sess.run(tf.global_variables_initializer())
-    ckpt = tf.train.get_checkpoint_state(FLAGS.logs_dir)
+    ckpt = tf.train.get_checkpoint_state('/scratch1/ram095/nips20/logs')
     if ckpt and ckpt.model_checkpoint_path:
         saver.restore(sess, ckpt.model_checkpoint_path)
         print("Model restored...")
@@ -228,10 +228,10 @@ def main(argv=None):
         for itr in xrange(MAX_ITERATION):
             
             train_images, train_annotations = train_dataset_reader.next_batch(FLAGS.batch_size)
-            xx = random.randint(0,100)
-            xy =  random.randint(0,100)
-            h = random.randint(50,100)
-            w = random.randint(50,100)
+            xx = 50
+            xy =  50
+            h = 50
+            w = 50
             train_images[:,xx:xx+h,xy:xy+w,:] =0
 
             z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,3))
@@ -240,7 +240,7 @@ def main(argv=None):
            #train_images[:,50:100,50:100,:] =0
             v = 0
             
-            for p in range(3):
+            for p in range(10):
                 z_ol = np.copy(z_)
                # print("666666666666666666666666666666666666666")
                 z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
@@ -265,10 +265,10 @@ def main(argv=None):
 
             if itr % 500 == 0:
                 valid_images, valid_annotations = validation_dataset_reader.next_batch(FLAGS.batch_size)
-                xx = random.randint(50,100)
-                xy = random.randint(50,100)
-                h = random.randint(50,100)
-                w = random.randint(50,100)
+                xx = 50
+                xy = 50
+                h = 50
+                w = 50
                 valid_images[:,xx:xx+h,xy:xy+w,:] =0
                 valid_loss, summary_sva = sess.run([loss, loss_summary], feed_dict={image: valid_images, annotation: valid_annotations,
                                                        keep_probability: 1.0, z: z_})
@@ -276,19 +276,19 @@ def main(argv=None):
 
                 # add validation loss to TensorBoard
                 validation_writer.add_summary(summary_sva, itr)
-                saver.save(sess, FLAGS.logs_dir + "model_z_reg.ckpt", 500)
+                saver.save(sess, '/scratch1/ram095/nips20/logs/' + "model_z_center.ckpt", 500)
 
     elif FLAGS.mode == "visualize":
         valid_images, valid_annotations = validation_dataset_reader.get_random_batch(2)
-        xx = random.randint(50,100)
-        xy = random.randint(50,100)
-        h = random.randint(50,100)
-        w = random.randint(50,100)
+        xx = 50
+        xy = 50
+        h = 50
+        w = 50
         valid_images[:,xx:xx+h,xy:xy+w,:] =0
         z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,3))
         feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_}
         v= 0
-        for p in range(3):
+        for p in range(10):
                 z_ol = np.copy(z_)
                # print("666666666666666666666666666666666666666")
                 z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)

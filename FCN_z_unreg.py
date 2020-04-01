@@ -128,7 +128,7 @@ def inference(image, keep_prob,z):
 	
        # W_h = utils.weight_variable([1, 7, 7, 4], name="Wh")
 
-        conv8 = tf.concat([utils.conv2d_basic(relu_dropout7, W8, b8), tf.nn.dropout(z,keep_prob=0.8)],axis = 3)
+        conv8 = tf.concat([utils.conv2d_basic(relu_dropout7, W8, b8), z],axis = 3)
         # annotation_pred1 = tf.argmax(conv8, dimension=3, name="prediction1")
         print("###########################################################")
         print(conv8)
@@ -240,7 +240,7 @@ def main(argv=None):
            #train_images[:,50:100,50:100,:] =0
             v = 0
             
-            for p in range(3):
+            for p in range(20):
                 z_ol = np.copy(z_)
                # print("666666666666666666666666666666666666666")
                 z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
@@ -276,7 +276,7 @@ def main(argv=None):
 
                 # add validation loss to TensorBoard
                 validation_writer.add_summary(summary_sva, itr)
-                saver.save(sess, FLAGS.logs_dir + "model_z_reg.ckpt", 500)
+                saver.save(sess, FLAGS.logs_dir + "model_z.ckpt", 500)
 
     elif FLAGS.mode == "visualize":
         valid_images, valid_annotations = validation_dataset_reader.get_random_batch(2)
@@ -288,7 +288,7 @@ def main(argv=None):
         z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,3))
         feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_}
         v= 0
-        for p in range(3):
+        for p in range(20):
                 z_ol = np.copy(z_)
                # print("666666666666666666666666666666666666666")
                 z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)

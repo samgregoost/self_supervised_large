@@ -1,0 +1,4 @@
+WARNING:tensorflow:From /home/ram095/sameera/self_supervised/self_supervised_large/mnist128zunreg.py:160: calling argmax (from tensorflow.python.ops.math_ops) with dimension is deprecated and will be removed in a future version.
+Instructions for updating:
+Use the `axis` argument instead
+slurmstepd: error: *** JOB 41722714 ON b019 CANCELLED AT 2020-03-19T16:39:27 DUE TO TIME LIMIT ***

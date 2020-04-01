@@ -10,7 +10,7 @@ from six.moves import xrange
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("batch_size", "2", "batch size for training")
-tf.flags.DEFINE_string("logs_dir", "logs/", "path to logs directory")
+tf.flags.DEFINE_string("logs_dir", "/scratch1/ram095/nips20/logs_maskwhite/", "path to logs directory")
 tf.flags.DEFINE_string("data_dir", "Data_zoo/MIT_SceneParsing/", "path to dataset")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
 tf.flags.DEFINE_string("model_dir", "Model_zoo/", "Path to vgg model mat")
@@ -21,7 +21,7 @@ MODEL_URL = 'http://www.vlfeat.org/matconvnet/models/beta16/imagenet-vgg-verydee
 
 MAX_ITERATION = int(1e5 + 1)
 NUM_OF_CLASSESS = 3
-IMAGE_SIZE = 224
+IMAGE_SIZE = 128
 
 
 def vgg_net(weights, image):
@@ -173,17 +173,34 @@ def main(argv=None):
     keep_probability = tf.placeholder(tf.float32, name="keep_probabilty")
     image = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 3], name="input_image")
     annotation = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 3], name="annotation")
-    z = tf.placeholder(tf.float32, shape=[None, 7, 7, 3], name="z")
+    z = tf.placeholder(tf.float32, shape=[None, 4, 4, 3], name="z")
 
-    pred_annotation, logits = inference(image, keep_probability,z)
-    tf.summary.image("input_image", image, max_outputs=2)
-    tf.summary.image("ground_truth", tf.cast(annotation, tf.uint8), max_outputs=2)
-    tf.summary.image("pred_annotation", tf.cast(pred_annotation, tf.uint8), max_outputs=2)
+    # pred_annotation, logits = inference(image, keep_probability,z)
+ #   tf.summary.image("input_image", image, max_outputs=2)
+ #   tf.summary.image("ground_truth", tf.cast(annotation, tf.uint8), max_outputs=2)
+ #   tf.summary.image("pred_annotation", tf.cast(pred_annotation, tf.uint8), max_outputs=2)
 #    loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits,
  #                                                                         labels=tf.squeeze(annotation, squeeze_dims=[3]),
   #                                                                    name="entropy")))
     
-    loss = tf.reduce_mean(tf.squared_difference(logits ,annotation ))
+    
+    mask_ = tf.ones([FLAGS.batch_size,64,64,3])
+    mask = tf.pad(mask_, [[0,0],[32,32],[32,32],[0,0]])
+
+    mask2__ = tf.ones([FLAGS.batch_size,78,78,3])
+    mask2_ = tf.pad(mask2__, [[0,0],[25,25],[25,25],[0,0]])
+    mask2 = mask2_ - mask
+
+    pred_annotation, logits = inference((1-mask)*image + mask*255, keep_probability,z)
+
+    tf.summary.image("input_image", image, max_outputs=2)
+    tf.summary.image("ground_truth", tf.cast(annotation, tf.uint8), max_outputs=2)
+    tf.summary.image("pred_annotation", tf.cast(pred_annotation, tf.uint8), max_outputs=2)
+
+    loss1 = 0.1 * tf.reduce_mean(tf.square((image - logits)*mask))
+    loss2 = tf.reduce_mean(tf.square((image - logits)*mask2))
+    loss = loss1 + loss2
+   # loss = tf.reduce_mean(tf.squared_difference(logits ,annotation ))
     loss_summary = tf.summary.scalar("entropy", loss)
     
     grads = train_z(loss,z)    
@@ -228,19 +245,13 @@ def main(argv=None):
         for itr in xrange(MAX_ITERATION):
             
             train_images, train_annotations = train_dataset_reader.next_batch(FLAGS.batch_size)
-            xx = random.randint(0,100)
-            xy =  random.randint(0,100)
-            h = random.randint(50,100)
-            w = random.randint(50,100)
-            train_images[:,xx:xx+h,xy:xy+w,:] =0
-
-            z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,3))
-            
+            z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,4,4,3))
+           # print(train_images)
             feed_dict = {image: train_images, annotation: train_annotations, keep_probability: 0.85, z: z_}
            #train_images[:,50:100,50:100,:] =0
             v = 0
             
-            for p in range(3):
+            for p in range(10):
                 z_ol = np.copy(z_)
                # print("666666666666666666666666666666666666666")
                 z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
@@ -265,30 +276,21 @@ def main(argv=None):
 
             if itr % 500 == 0:
                 valid_images, valid_annotations = validation_dataset_reader.next_batch(FLAGS.batch_size)
-                xx = random.randint(50,100)
-                xy = random.randint(50,100)
-                h = random.randint(50,100)
-                w = random.randint(50,100)
-                valid_images[:,xx:xx+h,xy:xy+w,:] =0
+           
                 valid_loss, summary_sva = sess.run([loss, loss_summary], feed_dict={image: valid_images, annotation: valid_annotations,
                                                        keep_probability: 1.0, z: z_})
                 print("%s ---> Validation_loss: %g" % (datetime.datetime.now(), valid_loss))
 
                 # add validation loss to TensorBoard
                 validation_writer.add_summary(summary_sva, itr)
-                saver.save(sess, FLAGS.logs_dir + "model_z_reg.ckpt", 500)
+                saver.save(sess, FLAGS.logs_dir + "model_z_center.ckpt", 500)
 
     elif FLAGS.mode == "visualize":
         valid_images, valid_annotations = validation_dataset_reader.get_random_batch(2)
-        xx = random.randint(50,100)
-        xy = random.randint(50,100)
-        h = random.randint(50,100)
-        w = random.randint(50,100)
-        valid_images[:,xx:xx+h,xy:xy+w,:] =0
-        z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,7,7,3))
+        z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,4,4,3))
         feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_}
         v= 0
-        for p in range(3):
+        for p in range(10):
                 z_ol = np.copy(z_)
                # print("666666666666666666666666666666666666666")
                 z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
@@ -303,7 +305,12 @@ def main(argv=None):
         
         pred = sess.run(logits, feed_dict={image: valid_images, annotation: valid_annotations,z:z_,
                                                     keep_probability: 1.0})
+       
+
         
+        valid_images_masked = (1-sess.run(mask))*valid_images
+        predicted_patch = sess.run(mask) * pred
+        pred = valid_images_masked + predicted_patch 
        # valid_annotations = np.squeeze(valid_annotations, axis=3)
        # pred = np.squeeze(pred, axis=3)
         print(valid_images.shape)
@@ -311,7 +318,7 @@ def main(argv=None):
         print(pred.shape)
 
         for itr in range(FLAGS.batch_size):
-            utils.save_image(valid_images[itr].astype(np.uint8), FLAGS.logs_dir, name="inp_" + str(5+itr))
+            utils.save_image(valid_images_masked[itr].astype(np.uint8), FLAGS.logs_dir, name="inp_" + str(5+itr))
             utils.save_image(valid_annotations[itr].astype(np.uint8), FLAGS.logs_dir, name="gt_" + str(5+itr))
             utils.save_image(pred[itr].astype(np.uint8), FLAGS.logs_dir, name="pred_" + str(5+itr))
             print("Saved image: %d" % itr)

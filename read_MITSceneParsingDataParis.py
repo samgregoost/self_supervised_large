@@ -47,18 +47,33 @@ def create_image_lists(image_dir):
         print(os.path.join(image_dir, "images", directory, '*.' + 'jpg'))
         file_glob_jpg = os.path.join(image_dir, "images", directory, '*.' + 'jpg')
         file_glob_JPG = os.path.join(image_dir, "images", directory, '*.' + 'JPG')
+        file_glob_png = os.path.join(image_dir, "images", directory, '*.' + 'png')
+        file_glob_JPEG = os.path.join(image_dir, "images", directory, '*.' + 'JPEG')
        # file_glob_png = os.path.join(image_dir, "images", directory, '*.' + 'png')
         file_list.extend(glob.glob(file_glob_jpg))
         file_list.extend(glob.glob(file_glob_JPG))
-
+        file_list.extend(glob.glob(file_glob_png))
+        file_list.extend(glob.glob(file_glob_JPEG))
         if not file_list:
             print('No files found')
         else:
             for f in file_list:
                 filename = os.path.splitext(f.split("/")[-1])[0]
-                annotation_file = os.path.join(image_dir, "annotations", directory, filename + '.png')
-                if os.path.exists(annotation_file):
-                    record = {'image': f, 'annotation': annotation_file, 'filename': filename}
+                annotation_file_JPG = os.path.join(image_dir, "images", directory, filename + '.JPG')
+                annotation_file_png = os.path.join(image_dir, "images", directory, filename + '.png')
+                annotation_file_jpg = os.path.join(image_dir, "images", directory, filename + '.jpg')
+                annotation_file_JPEG = os.path.join(image_dir, "images", directory, filename + '.JPEG')
+                if os.path.exists(annotation_file_jpg):
+                    record = {'image': f, 'annotation': annotation_file_jpg, 'filename': filename}
+                    image_list[directory].append(record)
+                elif  os.path.exists(annotation_file_png):
+                    record = {'image': f, 'annotation': annotation_file_png, 'filename': filename}
+                    image_list[directory].append(record)
+                elif  os.path.exists(annotation_file_JPG):
+                    record = {'image': f, 'annotation': annotation_file_JPG, 'filename': filename}
+                    image_list[directory].append(record)
+                elif  os.path.exists(annotation_file_JPEG):
+                    record = {'image': f, 'annotation': annotation_file_JPEG, 'filename': filename}
                     image_list[directory].append(record)
                 else:
                     print("Annotation file not found for %s - Skipping" % filename)
@@ -67,4 +82,5 @@ def create_image_lists(image_dir):
         no_of_images = len(image_list[directory])
         print ('No. of %s files: %d' % (directory, no_of_images))
 
+    
     return image_list
