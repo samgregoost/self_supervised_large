@@ -71,7 +71,7 @@ class BatchDatset:
         else:
             image_ = color.rgb2lab(resize_image)
             image = image_[:,:,1:]
-            image = (image + 128.0)/128.0 - 1
+            image = (image + 100.0)/100.0 - 1
 
           
         
