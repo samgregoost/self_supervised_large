@@ -93,6 +93,17 @@ class BatchDatset:
     def next_batch(self, batch_size):
         start = self.batch_offset
         self.batch_offset += batch_size
+
+        ''' 
+        if self.epochs_completed  == 0 and self.batch_offset == 0:
+            self.image_files, self.annotation_files = shuffle(self.image_files, self.annotation_files)
+            print("############################3 shuffled #########################")
+        start = self.batch_offset
+        self.batch_offset += batch_size
+        '''
+     #   if self.epochs_completed  == 0:
+      #      self.image_files, self.annotation_files = shuffle(self.image_files, self.annotation_files)
+
         if self.batch_offset > len(self.image_files):
             # Finished epoch
             self.epochs_completed += 1

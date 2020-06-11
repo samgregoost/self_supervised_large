@@ -3,18 +3,20 @@ import tensorflow as tf
 import numpy as np
 import random
 import TensorflowUtils as utils
-import read_MITSceneParsingDataParis as scene_parsing
+import read_MITSceneParsingDataZ as scene_parsing
 import datetime
-import BatchDatsetReaderMnist as dataset
+import BatchDatsetReaderZ as dataset
 from six.moves import xrange
 import math
 from scipy import signal
 from scipy.interpolate import interp1d
+import glob
+import os
 
 FLAGS = tf.flags.FLAGS
-tf.flags.DEFINE_integer("batch_size", "20", "batch size for training")
-tf.flags.DEFINE_string("logs_dir", "/scratch1/ram095/nips20/logs_mcz3lhz/", "path to logs directory")
-tf.flags.DEFINE_string("data_dir", "/scratch1/ram095/nips20/datasets/mnist_png/", "path to dataset")
+tf.flags.DEFINE_integer("batch_size", "1", "batch size for training")
+tf.flags.DEFINE_string("logs_dir", "/flush5/ram095/nips20/logs_z/", "path to logs directory")
+tf.flags.DEFINE_string("data_dir", "/scratch1/ram095/nips20/datasets/sharm", "path to dataset")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
 tf.flags.DEFINE_string("model_dir", "Model_zoo/", "Path to vgg model mat")
 tf.flags.DEFINE_bool('debug', "False", "Debug mode: True/ False")
@@ -22,9 +24,9 @@ tf.flags.DEFINE_string('mode', "train", "Mode train/ test/ visualize")
 
 MODEL_URL = 'http://www.vlfeat.org/matconvnet/models/beta16/imagenet-vgg-verydeep-19.mat'
 
-MAX_ITERATION = int(1e5 + 1)
-NUM_OF_CLASSESS = 3
-IMAGE_SIZE = 64
+MAX_ITERATION = int(1e7 + 1)
+NUM_OF_CLASSESS = 1
+IMAGE_SIZE = 10
 
 
 def vgg_net(weights, image):
@@ -201,12 +203,12 @@ def inference(images, keep_prob,z,e,is_train):
     :return:
     """
 
-    encoderLayerNum = int(math.log(IMAGE_SIZE) / math.log(2))
+    encoderLayerNum = int(math.log(64) / math.log(2))
     encoderLayerNum = encoderLayerNum - 1 # minus 1 because the second last layer directly go from 4x4 to 1x1 
     print("encoderLayerNum=", encoderLayerNum)
     encoderLayerNum = encoderLayerNum
 
-    decoderLayerNum = int(math.log(IMAGE_SIZE) / math.log(2))
+    decoderLayerNum = int(math.log(64) / math.log(2))
     decoderLayerNum = decoderLayerNum - 1
     print("decoderLayerNum=", decoderLayerNum)
     decoderLayerNum = decoderLayerNum
@@ -221,82 +223,105 @@ def inference(images, keep_prob,z,e,is_train):
     #processed_image = utils.process_image(image, mean_pixel)
 
     with tf.variable_scope("encoder", reuse = tf.AUTO_REUSE):
-
-        previousFeatureMap = images
-        previousDepth = 3
+        image_ = tf.contrib.layers.flatten(images)
+        upsample = tf.reshape(tf.nn.dropout(tf.layers.dense(image_, 64*64),keep_prob),[-1,64,64,1])
+        ubn = tf.nn.leaky_relu(batchnorm(upsample, is_train, name=("ubn")))
+   
+        previousFeatureMap = ubn
+        previousDepth = 1
         depth = 64
 
-        for layer in range(1, encoderLayerNum):
-            print("build_reconstruction encoder layer=", layer)
-            conv = tf.nn.dropout(new_conv_layer(previousFeatureMap, [4,4,previousDepth,depth], stride=2, name=("conv" + str(layer))),keep_prob)
-            bn = tf.nn.leaky_relu(batchnorm(conv, is_train, name=("bn" + str(layer))))
-            previousFeatureMap = bn
-            previousDepth = depth
-            depth = depth * 2
+        conv1 = tf.nn.dropout(new_conv_layer(previousFeatureMap, [4,4,previousDepth,depth], stride=2, name=("conv1")),keep_prob)
+        bn1 = tf.nn.leaky_relu(batchnorm(conv1, is_train, name=("bn1")))
+    #    bn1 = tf.nn.leaky_relu(conv1)
+        previousDepth = depth
+        depth = depth * 2
 
+        conv2 = tf.nn.dropout(new_conv_layer(bn1, [4,4,previousDepth,depth], stride=2, name=("conv2")),keep_prob)
+        bn2 = tf.nn.leaky_relu(batchnorm(conv2, is_train, name=("bn2")))
+      #  bn2 = tf.nn.leaky_relu(conv2)
+        previousDepth = depth
+        depth = depth * 2
+
+        conv3 = tf.nn.dropout(new_conv_layer(bn2, [4,4,previousDepth,depth], stride=2, name=("conv3")),keep_prob)
+        bn3 = tf.nn.leaky_relu(batchnorm(conv3, is_train, name=("bn3")))
+       # bn3 = tf.nn.leaky_relu(conv3) 
+        previousDepth = depth
+        depth = depth * 2
+
+        conv4 = tf.nn.dropout(new_conv_layer(bn3, [4,4,previousDepth,depth], stride=2, name=("conv4")),keep_prob)
+        bn4 = tf.nn.leaky_relu(batchnorm(conv4, is_train, name=("bn4")))
+      #  bn4 = tf.nn.leaky_relu(conv4)
+        previousDepth = depth
+        depth = depth * 2
+
+        
             # last layer
-        conv = new_conv_layer(previousFeatureMap, [4,4,previousDepth,4000], stride=2, padding='VALID', name=('conv' + str(encoderLayerNum)))
-        bn = tf.nn.leaky_relu(batchnorm(conv, is_train, name=("bn" + str(encoderLayerNum))))
-
+        conv5 = new_conv_layer(bn4, [4,4,previousDepth,4000], stride=2, padding='VALID', name=('conv5'))
+        bn5 = tf.nn.leaky_relu(batchnorm(conv5, is_train, name=("bn5")))
+      #  bn5 = tf.nn.leaky_relu(conv5)       
+  
         previousDepth = 4000
         depth = 64 * pow(2,decoderLayerNum-2)
         featureMapSize = 4
 
-        deconv =  tf.nn.dropout(new_deconv_layer( bn, [4,4,depth,previousDepth], [FLAGS.batch_size,featureMapSize,featureMapSize,depth], padding='VALID', stride=2, name=("deconv" + str(decoderLayerNum))),keep_prob)
+        deconv5 =  tf.nn.dropout(new_deconv_layer( bn5, [4,4,depth,previousDepth], [FLAGS.batch_size,featureMapSize,featureMapSize,depth], padding='VALID', stride=2, name=("deconv5")),keep_prob)
 
-        #debn_ = tf.nn.relu(batchnorm(deconv, is_train, name=("debn" + str(decoderLayerNum)))) 
+        #debn_ = tf.nn.relu(batchnorm(deconv, is_train, name=("debn" + str(decoderLayerNum))))
         z_ = z/tf.norm(z)
-        debn_ = tf.nn.relu(batchnorm(deconv, is_train, name=("debn" + str(decoderLayerNum))))
-        debn = tf.concat([debn_,tf.tile(z_,[1,4,4,1])],axis = 3) + e
+        debn_ = tf.nn.relu(batchnorm(deconv5, is_train, name=("debn5")))
+      #  debn_= tf.nn.relu(deconv5)
+        debn5 = tf.concat([debn_,tf.tile(z_,[1,4,4,1])],axis = 3) + e
+
+
 
     with tf.variable_scope("decoder", reuse = tf.AUTO_REUSE):
         print("#################################")
-        print(debn)
-        previousFeatureMap = debn
+        print(debn5)
+
+
+
+
         previousDepth = 522
-        depth = depth / 2
+        depth = int(depth / 2)
         featureMapSize = featureMapSize *2
 
-        for layer in range(decoderLayerNum-1,1, -1):
-            print("build_reconstruction decoder layer=", layer)
-            deconv = new_deconv_layer( previousFeatureMap, [4,4,depth,previousDepth], [FLAGS.batch_size,featureMapSize,featureMapSize,depth], stride=2, name=("deconv" + str(layer)))
-            debn = tf.nn.relu(batchnorm(deconv, is_train, name=('debn'+ str(layer))))
-            previousFeatureMap = debn
-            previousDepth = depth
-            depth = depth / 2
-            featureMapSize = featureMapSize *2
 
-        recon = tf.nn.tanh(new_deconv_layer( debn, [4,4,1,previousDepth], [FLAGS.batch_size,64,64,1], stride=2, name="recon"))
+        print("build_reconstruction decoder layer4")
+
+        deconv4 = new_deconv_layer( debn5, [4,4,depth,previousDepth], [FLAGS.batch_size,featureMapSize,featureMapSize,depth], stride=2, name=("deconv4"))
+        debn4 =  tf.concat([tf.nn.relu(batchnorm(deconv4, is_train, name=('debn4'))),bn3],axis = 3)
+
+       # debn4 = tf.concat([tf.nn.relu(deconv4),bn3], axis = 3)
+        previousDepth = depth * 2
+        depth = int(depth / 2)
+        featureMapSize = featureMapSize *2
+
+        deconv3 = new_deconv_layer( debn4, [4,4,depth,previousDepth], [FLAGS.batch_size,featureMapSize,featureMapSize,depth], stride=2, name=("deconv3"))
+        debn3 = tf.concat([tf.nn.relu(batchnorm(deconv3, is_train, name=('debn3'))), bn2],axis = 3)
+      #  debn3 = tf.concat([tf.nn.relu(deconv3)  , bn2], axis = 3)
+        previousDepth = depth * 2
+        depth = int(depth / 2)
+        featureMapSize = featureMapSize *2
 
 
-        ''' 
-        conv1 = new_conv_layer(images, [4,4,3,64], stride=2, name="conv1" )
-        bn1 = tf.nn.leaky_relu(batchnorm(conv1, is_train, name='bn1'))
-        conv2 = new_conv_layer(bn1, [4,4,64,64], stride=2, name="conv2" )
-        bn2 = tf.nn.leaky_relu(batchnorm(conv2, is_train, name='bn2'))
-        conv3 = new_conv_layer(bn2, [4,4,64,128], stride=2, name="conv3")
-        bn3 = tf.nn.leaky_relu(batchnorm(conv3, is_train, name='bn3'))
-        conv4 = new_conv_layer(bn3, [4,4,128,256], stride=2, name="conv4")
-        bn4 = tf.nn.leaky_relu(batchnorm(conv4, is_train, name='bn4'))
-        conv5 = new_conv_layer(bn4, [4,4,256,512], stride=2, name="conv5")
-        bn5 = tf.nn.leaky_relu(batchnorm(conv5, is_train, name='bn5'))
-        conv6 = new_conv_layer(bn5, [4,4,512,4000], stride=2, padding='VALID', name='conv6')
-        bn6 = tf.nn.leaky_relu(batchnorm(conv6, is_train, name='bn6'))
-    
+        deconv2 = new_deconv_layer( debn3, [4,4,depth,previousDepth], [FLAGS.batch_size,featureMapSize,featureMapSize,depth], stride=2, name=("deconv2"))
+        debn2 = tf.concat([tf.nn.relu(batchnorm(deconv2, is_train, name=('debn2'))),bn1],axis = 3)
+       # debn2 = tf.concat([tf.nn.relu(deconv2) ,bn1], axis = 3)
+        previousDepth = depth * 2
+        depth = int(depth / 2)
+        featureMapSize = featureMapSize *2
 
-        deconv4 = new_deconv_layer( bn6, [4,4,512,4000], conv5.get_shape().as_list(), padding='VALID', stride=2, name="deconv4")
-        debn4 = tf.nn.relu(batchnorm(deconv4, is_train, name='debn4'))
-        deconv3 = new_deconv_layer( debn4, [4,4,256,512], conv4.get_shape().as_list(), stride=2, name="deconv3")
-        debn3 = tf.nn.relu(batchnorm(deconv3, is_train, name='debn3'))
-        deconv2 = new_deconv_layer( debn3, [4,4,128,256], conv3.get_shape().as_list(), stride=2, name="deconv2")
-        debn2 = tf.nn.relu(batchnorm(deconv2, is_train, name='debn2'))
-        deconv1 = new_deconv_layer( debn2, [4,4,64,128], conv2.get_shape().as_list(), stride=2, name="deconv1")
-        debn1 = tf.nn.relu(batchnorm(deconv1, is_train, name='debn1'))
-        recon = new_deconv_layer( debn1, [4,4,3,64], [batch_size,64,64,3], stride=2, name="recon")
+         
+        recon_ = new_deconv_layer( debn2, [4,4,1,previousDepth], [FLAGS.batch_size,64,64,1], stride=2, name="recon")
+        rbn = tf.nn.relu(batchnorm(recon_, is_train, name=("rbn")))
 
-        print("##########################################")
-        print(recon)
-        '''
+        reconf = tf.contrib.layers.flatten(rbn)
+        
+        recon = tf.nn.tanh(tf.reshape(tf.nn.dropout(tf.layers.dense(reconf, IMAGE_SIZE*IMAGE_SIZE),keep_prob),[-1,IMAGE_SIZE,IMAGE_SIZE,1]))
+       # ubn = tf.nn.leaky_relu(batchnorm(recon, is_train, name=("r")))
+         
+   
     return recon, debn_
 
 def predictor_(h,z, is_train):
@@ -351,22 +376,32 @@ def train_z(loss,Z):
     return tf.gradients(ys = loss, xs = Z)
 
 def random_mask(input_size):
-    x1 = random.randint(5, 7)
-    w1 = random.randint(20, 34)
-    y1 = random.randint(5, 7)
-    h1 = random.randint(45, 50)
+    x1 =  random.randint(0, 5)
+    w1 = random.randint(2, 4)
+    y1 = random.randint(0, 5)
+    h1 =  random.randint(2, 4)
 
-    mask = np.zeros((1,64,64,1))
-    mask[:,x1:w1,y1:h1,:] = 1.0
+    mask = np.zeros((1,10,10,1))
+    mask[:,x1:x1+w1,y1:y1+h1,:] = 1.0
 
-    return mask
+   # mask2 = np.zeros((1,10,10,1))
+   # mask2[:,x1-5:x1+w1+5,y1-5:h1+y1+5,:] = 1.0
+    mask2 = mask
+
+    return mask, mask2
 
 def main(argv=None):
+
+    file_list = glob.glob(os.path.join('/scratch1/ram095/nips20/datasets/ModelNet10harm/test/chair'  , '*.npy'))
+    
+    
+
     keep_probability = tf.placeholder(tf.float32, name="keep_probabilty")
-    image = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 3], name="input_image")
+    image = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 1], name="input_image")
     annotation = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 1], name="annotation")
     z = tf.placeholder(tf.float32, shape=[None, 1, 1, 10], name="z")
-    mask = tf.placeholder(tf.float32, shape=[None, 64, 64, 1], name="mask")
+    mask = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 1], name="mask")
+    mask2 = tf.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 1], name="mask2")
     z_new = tf.placeholder(tf.float32, shape=[None, 1, 1, 10], name="z_new")
     istrain = tf.placeholder(tf.bool)
    #z_lip = tf.placeholder(tf.float32, shape=[None, 1, 1, 10], name="z_lip")
@@ -374,7 +409,7 @@ def main(argv=None):
     e = tf.placeholder(tf.float32, shape=[None, 4, 4, 522], name="e")
     e_p = tf.placeholder(tf.float32, shape=[None, 1, 1, 8202], name="e_p")
     
-
+    save_itr = 0
     # pred_annotation, logits = inference(image, keep_probability,z)
  #   tf.summary.image("input_image", image, max_outputs=2)
  #   tf.summary.image("ground_truth", tf.cast(annotation, tf.uint8), max_outputs=2)
@@ -390,9 +425,9 @@ def main(argv=None):
  #   mask2__ = tf.ones([FLAGS.batch_size,78,78,3])
   #  mask2_ = tf.pad(mask2__, [[0,0],[25,25],[25,25],[0,0]])
    # mask2 = mask2_ - mask
-    zero = tf.zeros([20,1,1,8202])   
-    logits, h  = inference((1-mask)*image + mask*0.0, keep_probability,z,0.0,istrain)
-    logits_e, h_e = inference((1-mask)*image + mask*0.0, keep_probability,z,e,istrain)
+    zero = tf.zeros([FLAGS.batch_size,1,1,8202])   
+    logits, h  = inference((1-mask)*image + mask*-1.0,keep_probability,z,0.0,istrain)
+    logits_e, h_e = inference((1-mask)*image + mask*-1.0, keep_probability,z,e,istrain)
     #logits_lip,_  = inference((1-mask)*image + mask*0.0, keep_probability,z_lip,istrain   ) 
     #logits_lip_inv,_  = inference((1-mask)*image + mask*0.0, keep_probability,z_lip_inv,istrain   )
 
@@ -413,9 +448,16 @@ def main(argv=None):
     
   #  loss_mask = 0.8*tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square((image - logits)*mask),[1,2,3])))
     loss_mask = tf.reduce_mean(tf.reduce_sum(tf.contrib.layers.flatten(tf.abs((annotation - logits)*mask)),1))
-    loss =  loss_mask
+    loss_mask2 = tf.reduce_mean(tf.reduce_sum(tf.contrib.layers.flatten(tf.abs((annotation - logits)*mask2)),1)) 
+  #  annotation_ssim = (annotation +1.0)*255/2.0
+  #  logits_ssim = (logits +1.0)*255/2.0
+   # loss_ssim =  -0.5*tf.reduce_mean(tf.image.ssim(annotation_ssim , logits_ssim,max_val = 255.0))
+  #  loss_ssim =  -1.0*tf.log(tf.reduce_mean(tf.image.ssim(annotation_ssim*mask , logits_ssim *mask,max_val = 255.0)))
+    loss_ = loss_mask
+  #  #loss_ = loss_mask# + 0.07*loss_ssim
+    loss_ssim = loss_mask
   #  loss = tf.reduce_mean(tf.squared_difference(logits ,annotation ))
-    loss_summary = tf.summary.scalar("entropy", loss)
+    loss_summary = tf.summary.scalar("entropy", loss_)
    # zloss = tf.reduce_mean(tf.losses.cosine_distance(tf.contrib.layers.flatten(z_new) ,tf.contrib.layers.flatten(z_pred),axis =1)) 
     zloss_ = tf.reduce_mean(tf.reduce_sum(tf.contrib.layers.flatten(tf.abs((z_pred - z_new))),1))
  #   zloss_lip = tf.reduce_mean(tf.reduce_sum(tf.contrib.layers.flatten(tf.abs((z_pred - z_pred_lip))),1))
@@ -425,16 +467,55 @@ def main(argv=None):
         
 
     lip_loss_dec = tf.reduce_mean(tf.reduce_sum(tf.contrib.layers.flatten(tf.abs((logits - logits_e))),1))
-    loss = loss_mask + 0.1*lip_loss_dec 
+    loss = loss_ + 0.01*lip_loss_dec 
    
     lip_loss_pred = tf.reduce_mean(tf.reduce_sum(tf.contrib.layers.flatten(tf.abs((z_pred - z_pred_e))),1))     
     zloss = zloss_ + 0.1*lip_loss_pred
    
-    grads = train_z(loss_mask,z)    
+    grads = train_z(loss_,z)    
 
     trainable_var = tf.trainable_variables()
     trainable_z_pred_var = tf.trainable_variables(scope="predictor")
     trainable_d_pred_var = tf.trainable_variables(scope="decoder")
+
+
+    h_mask = np.zeros((FLAGS.batch_size, 10,10,1))
+    features_arr = np.empty((0,8192), float)
+    sess = tf.Session()
+
+    print("Setting up Saver...")
+    saver = tf.train.Saver()
+
+    # create two summary writers to show training loss and validation loss in the same graph
+    # need to create two folders 'train' and 'validation' inside FLAGS.logs_dir
+    train_writer = tf.summary.FileWriter(FLAGS.logs_dir + '/train', sess.graph)
+    validation_writer = tf.summary.FileWriter(FLAGS.logs_dir + '/validation')
+
+    sess.run(tf.global_variables_initializer())
+    ckpt = tf.train.get_checkpoint_state(FLAGS.logs_dir)
+    if ckpt and ckpt.model_checkpoint_path:
+        saver.restore(sess, ckpt.model_checkpoint_path)
+        print("Model restored...")
+
+
+    for f in file_list:
+        arr = np.load(f)
+        arr = np.nan_to_num(arr)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+        arr = np.exp(arr) / np.sum(np.exp(np.maximum(arr,0.00001)))
+        arr = np.nan_to_num(arr)
+       # print("$$$$$$$$$$$$$$$$$$$$$$$")
+       # print(np.isnan(image).any())
+        arr = np.clip(arr/0.5 - 1.0,-1.0,1.0)
+        arr = np.reshape(arr, (1,10,10,1))
+
+        features = sess.run(h, feed_dict={image:arr, mask: h_mask, keep_probability:1.0 , istrain:False})
+        features = np.reshape(features, (1,8192))
+        features_arr = np.append(features_arr, features, axis=0)
+
+    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+    print(features_arr.shape)
+    np.save('/scratch1/ram095/nips20/datasets/mfeatures/test/chairfeatures.npy', features_arr)
 
 
     print(trainable_z_pred_var)
@@ -456,7 +537,7 @@ def main(argv=None):
     print("Setting up dataset reader")
     image_options = {'resize': True, 'resize_size': IMAGE_SIZE}
     if FLAGS.mode == 'train':
-        train_dataset_reader = dataset.BatchDatset(train_records, image_options)
+    	train_dataset_reader = dataset.BatchDatset(train_records, image_options)
     validation_dataset_reader = dataset.BatchDatset(valid_records, image_options)
 
     sess = tf.Session()
@@ -476,6 +557,28 @@ def main(argv=None):
         print("Model restored...")
     
     saved =True
+    '''
+    h_mask = np.zeros((FLAGS.batch_size, 10,10,1))
+    features_arr = np.empty((0,8192), float)
+    for f in file_list:
+        arr = np.load(f)
+        arr = np.nan_to_num(arr)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+        arr = np.exp(arr) / np.sum(np.exp(np.maximum(arr,0.00001)))
+        arr = np.nan_to_num(arr)
+       # print("$$$$$$$$$$$$$$$$$$$$$$$")
+       # print(np.isnan(image).any())
+        arr = np.clip(arr/0.5 - 1.0,-1.0,1.0)
+
+        features = sess.run(h, feed_dict={image:arr, mask: h_mask, keep_probability:1.0 , istrain:False})
+        features = np.reshape(features, (1,8192))
+        features_arr = np.append(features_arr, features, axis=0)
+
+    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+    print(features_arr.shape)
+    np.save('/scratch1/ram095/nips20/datasets/mfeatures/train/bathfeatures.npy', features_arr)
+    '''
+        
     if FLAGS.mode == "train":
         for itr in xrange(MAX_ITERATION):
             
@@ -483,10 +586,10 @@ def main(argv=None):
             print(np.max(train_images))
           #  z_ = np.reshape(signal.gaussian(200, std=1),(FLAGS.batch_size,1,1,10))-0.5
             z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,1,1,10))
-            train_images[train_images < 0.] = -1.
-            train_annotations[train_annotations < 0.] = -1.
-            train_images[train_images >= 0.] = 1.0
-            train_annotations[train_annotations >= 0.] = 1.0
+ #           train_images[train_images < 0.] = -1.
+  #          train_annotations[train_annotations < 0.] = -1.
+   #         train_images[train_images >= 0.] = 1.0
+    #        train_annotations[train_annotations >= 0.] = 1.0
                     
             x1 = random.randint(0, 10) 
             w1 = random.randint(30, 54)
@@ -494,20 +597,15 @@ def main(argv=None):
             h1 = random.randint(30, 54)
 
             cond = random.randint(0, 10)
-           # saved = True 
-            if cond <= 0:
-              #  train_images[:,16:20,20:40,:] = 1.0
-                train_annotations[:,16:20,20:40,:] = 1.0
- 
-            ''' 
-            if cond <=7:
+           # saved = True   
+            if False:
                 saved = False
                 train_images_m, train_annotations_m = train_dataset_reader.get_random_batch(FLAGS.batch_size)
                 train_images_m[train_images_m < 0.] = -1.
                 train_annotations_m[train_annotations_m < 0.] = -1.
                 train_images_m[train_images_m >= 0.] = 1.0
                 train_annotations_m[train_annotations_m >= 0.] = 1.0
-               
+
                 train_images = (train_images + 1.)/2.0*255.0
                 train_annotations = (train_annotations + 1.)/2.0*255.0
                 train_images_m = (train_images_m + 1.)/2.0*255.0
@@ -517,12 +615,12 @@ def main(argv=None):
                 train_annotations_m[:,32:,:,:] = 0
                 train_images = np.clip((train_images + train_images_m),0.0,255.0)
                 train_annotations =  np.clip((train_annotations + train_annotations_m),0.0,255.0)
-                
-             #   train_images[train_images < 0.] = -1.
-             #   train_annotations[train_annotations < 0.] = -1.
-             #   train_images[train_images >= 0.] = 1.0
-             #   train_annotations[train_annotations >= 0.] = 1.0
-                
+                '''
+                train_images[train_images < 0.] = -1.
+                train_annotations[train_annotations < 0.] = -1.
+                train_images[train_images >= 0.] = 1.0
+                train_annotations[train_annotations >= 0.] = 1.0
+                '''
 
                 train_annotations_ = np.squeeze(train_annotations,axis = 3)
                 train_images_ = train_images
@@ -534,9 +632,9 @@ def main(argv=None):
                 #    utils.save_image(train_images_[itr_].astype(np.uint8), FLAGS.logs_dir, name="inp_" + str(5+itr_) )
                  #   utils.save_image(train_annotations_[itr_].astype(np.uint8), FLAGS.logs_dir, name="gt_" + str(5+itr_) )
     #        train_images[:,x1:w1,y1:h1,:] = 0
-            '''
+            
           #  print(train_images)
-            r_m = random_mask(64)
+            r_m, r_m2 = random_mask(64)
            #feed_dict = {image: train_images, annotation: train_annotations, keep_probability: 0.85, z: z_,mask:r_m, istrain:True }
            #train_images[:,50:100,50:100,:] =0
             v = 0
@@ -554,20 +652,20 @@ def main(argv=None):
                 z_ol = np.copy(z_)
             #    z_l = z_ol + np.random.normal(0.0,0.001)
                # print("666666666666666666666666666666666666666")
-                feed_dict = {image: train_images, annotation: train_annotations, keep_probability: 0.85, z: z_,e:error_dec, mask:r_m, istrain:True }         
+                feed_dict = {image: train_images, annotation: train_annotations, keep_probability: 0.85, z: z_,e:error_dec, mask:r_m,mask2:r_m2, istrain:True }         
                # lloss,_ = sess.run([lip_loss, train_lip ], feed_dict=feed_dict)
                # print("Step: %d, z_step: %d, lip_loss:%g" % (itr,p,lloss))     
-                z_loss, summ = sess.run([loss,loss_summary], feed_dict=feed_dict)
-                print("Step: %d, z_step: %d, Train_loss:%g" % (itr,p,z_loss))
+                z_loss,l_mask,l_ssim, l_lip, summ = sess.run([loss, loss_mask, loss_ssim, lip_loss_dec, loss_summary], feed_dict=feed_dict)
+                print("Step: %d, z_step: %d, Train_loss:%g, Loss_mask:%g, SSIM_loss:%g, lip_loss:%g, " % (itr,p,z_loss,l_mask,l_ssim, l_lip))
 #                print(z_) 
                 g = sess.run([grads],feed_dict=feed_dict)
                 v_prev = np.copy(v)
-              #  print(g[0][0].shape)
+               # print(g[0][0].shape)
                 v = 0.001*v - 0.1*g[0][0]
                 z_ += 0.001 * v_prev + (1+0.001)*v
-                z_ = np.clip(z_, -10.0, 10.0)
+          #      z_ = np.clip(z_, -10.0, 10.0)
                 
-            	
+                '''
                 m = interp1d([-10.0,10.0],[-1.0,1.0])
                 print(np.max(z_))
                 print(np.min(z_))
@@ -575,15 +673,15 @@ def main(argv=None):
                 z_interp = m(z_)
                 _,z_pred_loss =sess.run([train_pred,zloss],feed_dict={image: train_images,mask:r_m,z:z_ol_interp,z_new:z_interp,e_p:error_dec_,istrain:True,keep_probability: 0.85})
                 print("Step: %d, z_step: %d, z_pred_loss:%g" % (itr,p,z_pred_loss))
-                
-                
+                '''
+
                # _,z_pred_loss =sess.run([train_pred,zloss],feed_dict={image: train_images,mask:r_m,z:z_ol,z_new:z_,istrain:True,keep_probability: 0.85})
                # print("Step: %d, z_step: %d, z_pred_loss:%g" % (itr,p,z_pred_loss))
                # z_ = np.clip(z_, -1.0, 1.0)
                # print(v.shape)
                # print(z_.shape)
-           # feed_dict = {image: train_images, annotation: train_annotations, keep_probability:0.85,mask:r_m,e:error_dec, z: z_, istrain:True }
-           # sess.run(train_op, feed_dict=feed_dict)
+            feed_dict = {image: train_images, annotation: train_annotations, keep_probability:0.85,mask:r_m,e:error_dec, z: z_,mask2:r_m2, istrain:True }
+            sess.run(train_op, feed_dict=feed_dict)
 
             if itr % 10 == 0:
                 train_loss, summary_str = sess.run([loss, loss_summary], feed_dict=feed_dict)
@@ -594,10 +692,10 @@ def main(argv=None):
 
             if itr % 500 == 0:
                 valid_images, valid_annotations = validation_dataset_reader.next_batch(FLAGS.batch_size)
-                valid_annotations[valid_annotations < 0.] = -1.
-                valid_images[valid_images < 0.] = -1.
-                valid_annotations[valid_annotations >= 0.] = 1.0
-                valid_images[valid_images >= 0.] = 1.0
+     #           valid_annotations[valid_annotations < 0.] = -1.
+      #          valid_images[valid_images < 0.] = -1.
+       #         valid_annotations[valid_annotations >= 0.] = 1.0
+        #        valid_images[valid_images >= 0.] = 1.0
                 
                 x1 = random.randint(0, 10)
                 w1 = random.randint(30, 54)
@@ -606,37 +704,40 @@ def main(argv=None):
 
      #           valid_images[:,x1:w1,y1:h1,:] = 0
                  
-                valid_loss, summary_sva = sess.run([loss, loss_summary], feed_dict={image: valid_images,mask:random_mask(64), annotation: valid_annotations,
-                                                       keep_probability: 1.0, z: z_,e:error_dec, istrain:False })
+                valid_loss, summary_sva = sess.run([loss, loss_summary], feed_dict={image: valid_images,mask:r_m, annotation: valid_annotations,
+                                                       keep_probability: 1.0, z: z_,e:error_dec, istrain:False,mask2:r_m2 })
                 print("%s ---> Validation_loss: %g" % (datetime.datetime.now(), valid_loss))
 
                 # add validation loss to TensorBoard
                 validation_writer.add_summary(summary_sva, itr)
-                saver.save(sess, FLAGS.logs_dir + "model_z_center_zpred3.ckpt", 500)
+                if itr % 3000 == 0:
+                    save_itr = save_itr + 3000
+               
+                saver.save(sess, FLAGS.logs_dir + "model.ckpt", save_itr)
+
+                
 
     elif FLAGS.mode == "visualize":
-        valid_images, valid_annotations = validation_dataset_reader.next_batch(20)
-        valid_annotations[valid_annotations < 0.] = -1.0
-        valid_images[valid_images < 0.] = -1.0
-        valid_annotations[valid_annotations >= 0.] = 1.0
-        valid_images[valid_images >= 0.] = 1.0
+        valid_images, valid_annotations = validation_dataset_reader.get_random_batch(FLAGS.batch_size)
+      #  valid_annotations[valid_annotations < 0.] = -1.0
+      #  valid_images[valid_images < 0.] = -1.0
+      #  valid_annotations[valid_annotations >= 0.] = 1.0
+      #  valid_images[valid_images >= 0.] = 1.0
         
         x1 = random.randint(0, 10)
         w1 = random.randint(30, 54)
         y1 = random.randint(0, 10)
         h1 = random.randint(30, 54)
- 
-#        valid_annotations[:,16:20,20:40,:] = 1.0
 
       #  valid_images[:,x1:w1,y1:h1,:] = 0
-        r_m = random_mask(64)      
+        r_m, r_m2 = random_mask(64)      
        # z_ = np.zeros(low=-1.0, high=1.0, size=(FLAGS.batch_size,1,1,10))
        # z_ = np.reshape(signal.gaussian(200, std=1),(FLAGS.batch_size,1,1,10))-0.5
         z_ = np.random.uniform(low=-1.0, high=1.0, size=(FLAGS.batch_size,1,1,10))
-        feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_, istrain:False,mask:r_m }
+        feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_, istrain:False,mask:r_m,mask2:r_m2 }
         v= 0
-        m__ = interp1d([-10.0,10.0],[-1.0,1.0])
-        z_ = m__(z_)
+       # m__ = interp1d([-10.0,10.0],[-1.0,1.0])
+       # z_ = m__(z_)
   #      feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z: z_, istrain:False,mask:r_m }
         for p in range(20):
                 z_ol = np.copy(z_)
@@ -648,11 +749,11 @@ def main(argv=None):
                # z_, z_pred_loss = sess.run(z_pred,zlossfeed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 1.0, z:z_ol, istrain:False,mask:r_m})
                 
 #                print(z_)
-            #    g = sess.run([grads],feed_dict=feed_dict)
-           #     v_prev = np.copy(v)
+                g = sess.run([grads],feed_dict=feed_dict)
+                v_prev = np.copy(v)
                # print(g[0][0].shape)
-          #      v = 0.001*v - 0.1*g[0][0]
-         #       z_ = z_ol +  0.001 * v_prev + (1+0.001)*v
+                v = 0.001*v - 0.1*g[0][0]
+                z_ = z_ol +  0.001 * v_prev + (1+0.001)*v
               #  z_ = z_ol + 0.001 * v_prev + (1+0.001)*v
                # print("z_____________")
                # print(z__)
@@ -660,16 +761,16 @@ def main(argv=None):
                # print(z_)
             #    m__ = interp1d([-10.0,10.0],[-1.0,1.0])
            #     z_ol = m__(z_ol)
-                z_ = sess.run(z_pred,feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z:z_ol, istrain:False,mask:r_m})
+         #       z_ = sess.run(z_pred,feed_dict = {image: valid_images, annotation: valid_annotations, keep_probability: 0.85, z:z_ol, istrain:False,mask:r_m})
              #   m_ = interp1d([-1.0,1.0],[-10.0,10.0])
               #  z_ = m_(z_)             
                # z_ = np.clip(z_, -1.0, 1.0)
                # print(z_pred_loss)
-        m_ = interp1d([-1.0,1.0],[-10.0,10.0])
-        z_ = m_(z_)
+       # m_ = interp1d([-1.0,1.0],[-10.0,10.0])
+       # z_ = m_(z_)
        
-        pred = sess.run(logits, feed_dict={image: valid_images, annotation: valid_annotations,z:z_, istrain:False,mask:r_m,
-                                                    keep_probability: 0.85})
+        pred = sess.run(logits, feed_dict={image: valid_images, annotation: valid_annotations,z:z_, istrain:False,mask:r_m,mask2:r_m2,
+                                                    keep_probability: 1.0})
         
 
                 
@@ -677,11 +778,11 @@ def main(argv=None):
        # valid_images = (valid_images +1.)/2.0*255
        # predicted_patch = sess.run(mask) * pred
        # pred = valid_images_masked + predicted_patch 
-        pred_ = (np.squeeze(pred, axis=3)+1.)/2.0*255
+        pred_ = (pred +1.)/2.0*255
 #        pred = pred + 1./2.0*255
         
-        pred = valid_images_masked[:,:,:,0] *(1-r_m)[:,:,:,0] + pred_ * r_m[:,:,:,0]
-        valid_annotations_ = (np.squeeze(valid_annotations, axis=3)+1.)/2.0*255
+        pred = valid_images_masked *(1-r_m) + pred_ * r_m
+        valid_annotations_ = (valid_annotations +1.)/2.0*255
        # pred = np.squeeze(pred, axis=3)
         print(np.max(pred))
         print(valid_images.shape)

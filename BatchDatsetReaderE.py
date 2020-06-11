@@ -3,7 +3,7 @@ Code ideas from https://github.com/Newmu/dcgan and tensorflow mnist dataset read
 """
 import numpy as np
 import scipy.misc as misc
-
+from skimage import io, color
 
 class BatchDatset:
     files = []
@@ -33,25 +33,46 @@ class BatchDatset:
     def _read_images(self):
         self.__channels = True
         self.images = np.array([self._transform(filename['image']) for filename in self.files])
-        self.__channels = True
-        self.annotations = np.array([self._transform(filename['image']) for filename in self.files])
+        self.__channels = False
+        self.annotations = np.array(
+            [self._transform(filename['annotation'])  for filename in self.files])
         print (self.images.shape)
         print (self.annotations.shape)
 
     def _transform(self, filename):
-        image = misc.imread(filename)
-        if self.__channels and len(image.shape) < 3:  # make sure images are of shape(h,w,3)
-            print("SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS")
-            image = np.array([image for i in range(3)])
+        image = misc.imread(filename, mode = 'RGB').astype(np.uint8)
+       # image = np.interp(image, (0, 255), (0, 0.1))
+        if self.__channels:  # make sure images are of shape(h,w,3)
+#            print("SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS")
+            image = image[:,:256,:]
+        
+      #      print(np.max(image))
+       #     print(np.min(image))
+        #    print(np.count_nonzero(image))
+            # image  = color.rgb2lab(image)
+            # image = (image + 128.0)/128.0 - 1
+           
+
+      
+        else:
+            image = image[:,256:,:]
+            
+            
+            
+            
 
         if self.image_options.get("resize", False) and self.image_options["resize"]:
             resize_size = int(self.image_options["resize_size"])
             resize_image = misc.imresize(image,
-                                         [resize_size, resize_size], interp='nearest')
+                                         [resize_size, resize_size], interp='bicubic')
         else:
             resize_image = image
+        
+       # resize_image  = color.rgb2lab(resize_image)
+        #resize_image = (resize_image + 128.0)/128.0 - 1
 
-        return np.array(resize_image/127.5 - 1.0)
+        resize_image = resize_image/127.5 - 1.0
+        return np.array(resize_image)
 
     def get_records(self):
         return self.images, self.annotations
@@ -62,6 +83,16 @@ class BatchDatset:
     def next_batch(self, batch_size):
         start = self.batch_offset
         self.batch_offset += batch_size
+
+        if self.epochs_completed == 0 and self.batch_offset == batch_size:
+            print("#######################shuffling################")
+            perm = np.arange(self.images.shape[0])
+            np.random.shuffle(perm)
+            self.images = self.images[perm]
+            self.annotations = self.annotations[perm]
+            start = 0
+            self.batch_offset = batch_size
+
         if self.batch_offset > self.images.shape[0]:
             # Finished epoch
             self.epochs_completed += 1
